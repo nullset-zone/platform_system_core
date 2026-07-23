@@ -533,6 +533,9 @@ uint32_t CheckPermissions(const std::string& name, const std::string& value,
 static timer_t auto_reboot_timer;
 static bool device_unlocked_at_least_once;
 static bool is_auto_reboot_timer_started;
+// GuardTalk exclusion windows (T-SEC-P2-AUTOREBOOT): pause stores remaining
+// boottime seconds; resume restarts the armed countdown without resetting.
+static time_t auto_reboot_paused_remaining_sec;
 
 static void auto_reboot_timer_callback(union sigval) {
     LOG(INFO) << "auto_reboot: received timer callback, rebooting";
@@ -575,12 +578,57 @@ static int auto_reboot_handle_property_set(const std::string& value) {
     LOG(DEBUG) << "auto_reboot: handle_property_set: " << value;
     if (value == "on_device_unlocked") {
         device_unlocked_at_least_once = true;
+        auto_reboot_paused_remaining_sec = 0;
         if (is_auto_reboot_timer_started) {
             auto_reboot_timer_set(0);
             is_auto_reboot_timer_started = false;
             LOG(INFO) << "auto_reboot: on_device_unlocked: stopped timer";
         } else {
             LOG(INFO) << "auto_reboot: on_device_unlocked: no started timer";
+        }
+        return PROP_SUCCESS;
+    }
+
+    // GuardTalk: pause/resume for exclusion windows (calls, camera, updates, …)
+    if (value == "pause") {
+        if (is_auto_reboot_timer_started) {
+            struct itimerspec ts_cur = {};
+            if (int r = timer_gettime(auto_reboot_timer, &ts_cur); r != 0) {
+                LOG(ERROR) << "auto_reboot: pause: timer_gettime failed: " << strerror(errno);
+                return PROP_ERROR_INVALID_VALUE;
+            }
+            auto_reboot_paused_remaining_sec = ts_cur.it_value.tv_sec;
+            if (ts_cur.it_value.tv_nsec > 0) {
+                auto_reboot_paused_remaining_sec += 1;
+            }
+            auto_reboot_timer_set(0);
+            is_auto_reboot_timer_started = false;
+            LOG(INFO) << "auto_reboot: pause: stored remaining "
+                      << auto_reboot_paused_remaining_sec << " seconds";
+        } else {
+            LOG(INFO) << "auto_reboot: pause: no started timer"
+                      << " (paused_remaining=" << auto_reboot_paused_remaining_sec << ")";
+        }
+        return PROP_SUCCESS;
+    }
+
+    if (value == "resume") {
+        if (!device_unlocked_at_least_once) {
+            LOG(INFO) << "auto_reboot: resume: device was never unlocked, skipped";
+            return PROP_SUCCESS;
+        }
+        if (is_auto_reboot_timer_started) {
+            LOG(INFO) << "auto_reboot: resume: timer already started, ignored";
+            return PROP_SUCCESS;
+        }
+        if (auto_reboot_paused_remaining_sec > 0) {
+            const time_t remaining = auto_reboot_paused_remaining_sec;
+            auto_reboot_paused_remaining_sec = 0;
+            auto_reboot_timer_set(remaining);
+            is_auto_reboot_timer_started = true;
+            LOG(INFO) << "auto_reboot: resume: restarted for " << remaining << " seconds";
+        } else {
+            LOG(DEBUG) << "auto_reboot: resume: nothing paused";
         }
         return PROP_SUCCESS;
     }
@@ -596,6 +644,8 @@ static int auto_reboot_handle_property_set(const std::string& value) {
             LOG(INFO) << "auto_reboot: timer is already started, ignored request to restart it;"
                 << " requested timer duration: " << value << " seconds";
         } else {
+            // Fresh arm clears any stale paused remainder.
+            auto_reboot_paused_remaining_sec = 0;
             auto_reboot_timer_set((time_t) duration_sec);
             is_auto_reboot_timer_started = true;
         }
