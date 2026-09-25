@@ -204,6 +204,9 @@ cc_binary {
     vendor_ramdisk_available: false,
     ramdisk: true,
     symlinks: ["snapuserd"],
+    sanitize: {
+        memtag_heap: false,
+    },
 }
 
 cc_defaults {

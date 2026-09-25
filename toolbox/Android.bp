@@ -94,6 +94,9 @@ cc_binary {
     ramdisk: true,
     static_executable: true,
     system_shared_libs: [],
+    sanitize: {
+        memtag_heap: false,
+    },
     exclude_shared_libs: [
         "libbase",
         "liblog",

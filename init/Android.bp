@@ -116,6 +116,15 @@ libinit_cc_defaults {
     name: "init_defaults",
     sanitize: {
         misc_undefined: ["signed-integer-overflow"],
+
+        // MTE on init is fatal when the bootloader/kernel does not force-enable MTE
+        // (rango ships with bootloader.pixel.MTE_FORCE_ON stripped from the kernel
+        // cmdline). execve() of an MTE-tagged init binary fails with ENOEXEC, which
+        // surfaces as `kill init! exitcode=0x7f00` since the kernel refuses to set up
+        // async heap tagging for PID 1. Disable memtag for all init variants so the
+        // .note.android.memtag note is never emitted.
+        memtag_heap: false,
+        memtag_stack: false,
     },
     cflags: [
         "-DDISABLE_EXTERNAL_PORTS_ON_NORMAL_BOOT=1",
@@ -489,6 +498,15 @@ init_first_stage_cc_defaults {
         // First stage init is weird: it may start without stdout/stderr, and no /proc.
         hwaddress: false,
         memtag_stack: false,
+
+        // MTE on first_stage init is fatal when the kernel does not force-enable MTE
+        // (rango ships with bootloader.pixel.MTE_FORCE_ON stripped). The kernel
+        // refuses to exec a binary with .note.android.memtag (ASYNC heap) when MTE
+        // is not force-on, producing "kill init! exitcode=0x7f00" before any log
+        // output. This must be disabled here because SANITIZE_TARGET may re-add
+        // memtag_heap via fullmte.mk (a product makefile that runs after BoardConfig,
+        // undoing the BoardConfig-excised-late.mk filter).
+        memtag_heap: false,
     },
 
     // Install adb_debug.prop into debug ramdisk.
